@@ -112,6 +112,7 @@ class VoiceModMod(loader.Module):
 
     def _patch_pytgcalls(self):
         """Создаёт и патчит herokutl_client.py для совместимости с herokutl"""
+        import shutil
         
         try:
             import pytgcalls
@@ -120,6 +121,15 @@ class VoiceModMod(loader.Module):
             
             src = os.path.join(mtproto_path, "telethon_client.py")
             dst = os.path.join(mtproto_path, "herokutl_client.py")
+            pycache = os.path.join(mtproto_path, "__pycache__")
+            
+            # Всегда удаляем старый herokutl_client и кэш для чистого патча
+            if os.path.exists(dst):
+                os.remove(dst)
+                logger.info("Removed old herokutl_client.py")
+            if os.path.exists(pycache):
+                shutil.rmtree(pycache)
+                logger.info("Removed __pycache__")
             
             if os.path.exists(src):
                 # Читаем telethon_client.py
