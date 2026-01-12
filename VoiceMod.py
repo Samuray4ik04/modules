@@ -142,10 +142,6 @@ class VoiceMod(loader.Module):
         "reply_audio": "<b>[Shazam]</b> Reply to audio",
         "searching": "<b>[VoiceMod]</b> Searching...",
         "not_found": "<b>[VoiceMod]</b> Not found: <code>{}</code>",
-        "cookies_set": "<b>[VoiceMod]</b> Cookies saved! File: <code>{}</code>",
-        "cookies_cleared": "<b>[VoiceMod]</b> Cookies cleared",
-        "cookies_info": "<b>[VoiceMod]</b> Current cookies: <code>{}</code>",
-        "cookies_not_set": "<b>[VoiceMod]</b> Cookies not set. Use <code>.vcookies</code> + reply to txt file",
     }
 
     strings_ru = {
@@ -168,10 +164,6 @@ class VoiceMod(loader.Module):
         "not_found": "<b>[VoiceMod]</b> Не найдено: <code>{}</code>",
         "no_chat": "<b>[VoiceMod]</b> Используй эту команду в группе/канале с войс-чатом",
         "not_supergroup": "<b>[VoiceMod]</b> Войс-чаты работают только в супергруппах/каналах. Преобразуй группу в супергруппу (включи историю чата или добавь бота)",
-        "cookies_set": "<b>[VoiceMod]</b> Cookies сохранены! Файл: <code>{}</code>",
-        "cookies_cleared": "<b>[VoiceMod]</b> Cookies удалены",
-        "cookies_info": "<b>[VoiceMod]</b> Текущий файл cookies: <code>{}</code>",
-        "cookies_not_set": "<b>[VoiceMod]</b> Cookies не установлены. Используй <code>.vcookies</code> + реплай на txt файл",
     }
 
     ytdlopts = {
@@ -453,32 +445,6 @@ class VoiceMod(loader.Module):
             await utils.answer(message, self.strings("unmute"))
         except Exception as e:
             await utils.answer(message, self.strings("error").format(str(e)))
-
-    @loader.command(ru_doc="[clear] или реплай на .txt — установить cookies для YouTube")
-    async def vcookiescmd(self, message: types.Message):
-        """[clear] or reply to .txt - Set YouTube cookies (stored securely)"""
-        args = utils.get_args_raw(message)
-        reply = await message.get_reply_message()
-        
-        if args == "clear":
-            self._clear_cookies()
-            return await utils.answer(message, self.strings("cookies_cleared"))
-        
-        if not reply or not reply.document:
-            if self._cookies_path:
-                return await utils.answer(message, self.strings("cookies_info").format("✓ configured"))
-            return await utils.answer(message, self.strings("cookies_not_set"))
-        
-        # Download, read content, save to DB, delete original file
-        file_path = await reply.download_media()
-        try:
-            with open(file_path, "r") as f:
-                content = f.read()
-            self._save_cookies(content)
-            await utils.answer(message, self.strings("cookies_set").format("✓ secured"))
-        finally:
-            if os.path.exists(file_path):
-                os.remove(file_path)
 
     @loader.command(ru_doc="<запрос> — поиск музыки")
     async def smcmd(self, message: types.Message):
