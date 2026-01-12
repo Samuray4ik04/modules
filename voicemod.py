@@ -130,34 +130,13 @@ class VoiceModMod(loader.Module):
                 content = content.replace('from telethon', 'from herokutl')
                 content = content.replace('import telethon', 'import herokutl')
                 
-                # Патчим on_update для безопасной обработки UpdateGroupCall
-                # herokutl может иметь другую структуру
-                old_on_update = '''async def on_update(update):
-            if isinstance(
-                update,
-                UpdateGroupCall,
-            ):
-                self._cache.set_cache(
-                    update.chat_id,'''
-                
-                new_on_update = '''async def on_update(update):
-            if isinstance(
-                update,
-                UpdateGroupCall,
-            ):
-                # herokutl compatibility: chat_id may be in different places
-                try:
-                    chat_id = getattr(update, 'chat_id', None)
-                    if chat_id is None and hasattr(update, 'call'):
-                        chat_id = getattr(update.call, 'chat_id', None)
-                    if chat_id is None:
-                        return  # Skip if can't get chat_id
-                except:
-                    return
-                self._cache.set_cache(
-                    chat_id,'''
-                
-                content = content.replace(old_on_update, new_on_update)
+                # ГЛАВНЫЙ ПАТЧ: herokutl UpdateGroupCall имеет 'peer' вместо 'chat_id'
+                # telethon: update.chat_id
+                # herokutl: update.peer (нужно извлечь id из peer)
+                content = content.replace(
+                    'update.chat_id,',
+                    '(update.peer.channel_id if hasattr(update.peer, "channel_id") else getattr(update.peer, "chat_id", 0)) if update.peer else 0,'
+                )
                 
                 # Записываем
                 with open(dst, 'w') as f:
