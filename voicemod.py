@@ -262,7 +262,6 @@ class VoiceModMod(loader.Module):
         args = utils.get_args_raw(message)
         reply = await message.get_reply_message()
         
-        chat_id = utils.get_chat_id(message)
         link = None
         audio_file = None
         
@@ -270,11 +269,7 @@ class VoiceModMod(loader.Module):
         if args:
             match = re.match(r"(-?\d+|@[\w]{5,})\s+(.*)", args)
             if match:
-                try:
-                    chat_id = int(match.group(1))
-                except ValueError:
-                    entity = await message.client.get_entity(match.group(1))
-                    chat_id = entity.id
+                # Первый аргумент — chat_id, остальное — ссылка
                 link = match.group(2)
             else:
                 link = args
@@ -285,6 +280,11 @@ class VoiceModMod(loader.Module):
         
         if not link and not audio_file:
             return await utils.answer(message, self.strings("no_audio"))
+        
+        # Получаем chat_id через нашу функцию (с правильным -100 префиксом)
+        chat_id = await self._get_chat_id(message)
+        if not chat_id:
+            return
         
         try:
             from pytgcalls.types import MediaStream
