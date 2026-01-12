@@ -151,12 +151,16 @@ class VoiceMod(loader.Module):
     def __init__(self):
         self.call = None
         self.active_chats = set()
-        self.cookies_file = None
+        self._cookies_path = None  # Temporary file path
 
     async def client_ready(self, client, db):
         self._client = client
         self._db = db
-        self.cookies_file = self.get("cookies_file", None)
+        # Migrate from old file-based storage
+        if self.get("cookies_file"):
+            self.set("cookies_file", None)
+        # Restore cookies from DB to temp file if exists
+        self._restore_cookies()
         
         wrapped = _ClientWrapper(client)
         self.call = PyTgCalls(wrapped)
@@ -184,6 +188,37 @@ class VoiceMod(loader.Module):
                 await self.call.stop()
             except Exception:
                 pass
+        # Clean up temp cookies file
+        if self._cookies_path and os.path.exists(self._cookies_path):
+            try:
+                os.remove(self._cookies_path)
+            except Exception:
+                pass
+
+    def _restore_cookies(self):
+        """Restore cookies from DB to temporary file"""
+        cookies_content = self.get("cookies_content")
+        if cookies_content:
+            self._cookies_path = os.path.abspath(".voicemod_cookies.txt")
+            with open(self._cookies_path, "w") as f:
+                f.write(cookies_content)
+        else:
+            self._cookies_path = None
+
+    def _save_cookies(self, content: str):
+        """Save cookies content to DB and restore to temp file"""
+        self.set("cookies_content", content)
+        self._restore_cookies()
+
+    def _clear_cookies(self):
+        """Clear cookies from DB and remove temp file"""
+        self.set("cookies_content", None)
+        if self._cookies_path and os.path.exists(self._cookies_path):
+            try:
+                os.remove(self._cookies_path)
+            except Exception:
+                pass
+        self._cookies_path = None
 
     async def _get_chat(self, message: types.Message):
         args = utils.get_args_raw(message)
@@ -202,6 +237,7 @@ class VoiceMod(loader.Module):
 
     @loader.command(ru_doc="[чат] — войти в войс-чат")
     async def vjoincmd(self, message: types.Message):
+        """[chat] - Join voice chat"""
         chat = await self._get_chat(message)
         if chat is None:
             return
@@ -215,6 +251,7 @@ class VoiceMod(loader.Module):
 
     @loader.command(ru_doc="[чат] — выйти из войс-чата")
     async def vleavecmd(self, message: types.Message):
+        """[chat] - Leave voice chat"""
         chat = await self._get_chat(message)
         if chat is None:
             return
@@ -228,6 +265,7 @@ class VoiceMod(loader.Module):
 
     @loader.command(ru_doc="<ссылка/реплай> — воспроизвести видео+аудио")
     async def vplaycmd(self, message: types.Message):
+        """<link/reply> - Play video+audio"""
         args = utils.get_args_raw(message)
         reply = await message.get_reply_message()
         chat = _get_full_chat_id(message.chat_id)
@@ -253,8 +291,8 @@ class VoiceMod(loader.Module):
                     'quiet': True,
                     'no_warnings': True,
                 }
-                if self.cookies_file and os.path.exists(self.cookies_file):
-                    opts['cookiefile'] = self.cookies_file
+                if self._cookies_path and os.path.exists(self._cookies_path):
+                    opts['cookiefile'] = self._cookies_path
                 
                 def download():
                     with YoutubeDL(opts) as ydl:
@@ -286,6 +324,7 @@ class VoiceMod(loader.Module):
 
     @loader.command(ru_doc="— стоп")
     async def vstopcmd(self, message: types.Message):
+        """Stop playing"""
         chat = await self._get_chat(message)
         if chat is None:
             return
@@ -298,6 +337,7 @@ class VoiceMod(loader.Module):
 
     @loader.command(ru_doc="— пауза")
     async def vpausecmd(self, message: types.Message):
+        """Pause playing"""
         chat = await self._get_chat(message)
         if chat is None:
             return
@@ -309,6 +349,7 @@ class VoiceMod(loader.Module):
 
     @loader.command(ru_doc="— продолжить")
     async def vresumecmd(self, message: types.Message):
+        """Resume playing"""
         chat = await self._get_chat(message)
         if chat is None:
             return
@@ -320,6 +361,7 @@ class VoiceMod(loader.Module):
 
     @loader.command(ru_doc="— заглушить")
     async def vmutecmd(self, message: types.Message):
+        """Mute stream"""
         chat = await self._get_chat(message)
         if chat is None:
             return
@@ -331,6 +373,7 @@ class VoiceMod(loader.Module):
 
     @loader.command(ru_doc="— включить звук")
     async def vunmutecmd(self, message: types.Message):
+        """Unmute stream"""
         chat = await self._get_chat(message)
         if chat is None:
             return
@@ -342,28 +385,33 @@ class VoiceMod(loader.Module):
 
     @loader.command(ru_doc="[clear] или реплай на .txt — установить cookies для YouTube")
     async def vcookiescmd(self, message: types.Message):
+        """[clear] or reply to .txt - Set YouTube cookies (stored securely)"""
         args = utils.get_args_raw(message)
         reply = await message.get_reply_message()
         
         if args == "clear":
-            self.cookies_file = None
-            self.set("cookies_file", None)
-            if os.path.exists("yt_cookies.txt"):
-                os.remove("yt_cookies.txt")
+            self._clear_cookies()
             return await utils.answer(message, self.strings("cookies_cleared"))
         
         if not reply or not reply.document:
-            if self.cookies_file and os.path.exists(self.cookies_file):
-                return await utils.answer(message, self.strings("cookies_info").format(self.cookies_file))
+            if self._cookies_path:
+                return await utils.answer(message, self.strings("cookies_info").format("✓ configured"))
             return await utils.answer(message, self.strings("cookies_not_set"))
         
-        file_path = await reply.download_media("yt_cookies.txt")
-        self.cookies_file = os.path.abspath(file_path)
-        self.set("cookies_file", self.cookies_file)
-        await utils.answer(message, self.strings("cookies_set").format(self.cookies_file))
+        # Download, read content, save to DB, delete original file
+        file_path = await reply.download_media()
+        try:
+            with open(file_path, "r") as f:
+                content = f.read()
+            self._save_cookies(content)
+            await utils.answer(message, self.strings("cookies_set").format("✓ secured"))
+        finally:
+            if os.path.exists(file_path):
+                os.remove(file_path)
 
     @loader.command(ru_doc="<запрос> — поиск музыки")
     async def smcmd(self, message: types.Message):
+        """<query> - Search music"""
         args = utils.get_args_raw(message)
         reply = await message.get_reply_message()
         
@@ -388,6 +436,7 @@ class VoiceMod(loader.Module):
 
     @loader.command(ru_doc="<реплай> — распознать трек")
     async def shazamcmd(self, message: types.Message):
+        """<reply> - Recognize track with Shazam"""
         reply = await message.get_reply_message()
         
         if not reply or not reply.media:
