@@ -296,20 +296,34 @@ class VoiceModMod(loader.Module):
             return
         
         try:
+            # py-tgcalls 2.x требует реальный медиафайл для подключения
+            # Создаём тихий аудиофайл (1 секунда тишины)
+            import tempfile
+            import struct
+            import wave
+            
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+                silent_file = f.name
+                # Создаём WAV с 1 секундой тишины
+                with wave.open(f.name, 'wb') as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(48000)
+                    # 1 секунда тишины
+                    wav.writeframes(b'\x00\x00' * 48000)
+            
             pytgcalls_mod = get_pytgcalls()
             MediaStream = pytgcalls_mod.types.MediaStream
             
-            # Создаём тихий стрим для подключения
-            await self._call_py.play(
-                chat_id,
-                MediaStream(
-                    media_path=None,
-                    audio_flags=MediaStream.Flags.IGNORE,
-                    video_flags=MediaStream.Flags.IGNORE,
-                ),
-            )
+            await self._call_py.play(chat_id, MediaStream(silent_file))
             self._active_chats[chat_id] = True
             await utils.answer(message, self.strings("join"))
+            
+            # Удаляем временный файл после подключения
+            try:
+                os.remove(silent_file)
+            except:
+                pass
         except Exception as e:
             logger.exception(e)
             await utils.answer(message, self.strings("error").format(str(e)))
