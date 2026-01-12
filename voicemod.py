@@ -172,14 +172,26 @@ class VoiceModMod(loader.Module):
                 self._call_py = None
                 return
             
+            logger.info(f"pytgcalls module: {pytgcalls_mod}")
+            logger.info(f"pytgcalls location: {getattr(pytgcalls_mod, '__file__', 'unknown')}")
+            
+            if not hasattr(pytgcalls_mod, 'PyTgCalls'):
+                logger.error(f"PyTgCalls class not found in module. Available: {dir(pytgcalls_mod)}")
+                self._call_py = None
+                return
+            
             PyTgCalls = pytgcalls_mod.PyTgCalls
+            logger.info(f"PyTgCalls class: {PyTgCalls}")
             
             # Создаём обёртку для HerokutTL, чтобы pytgcalls распознал его как Telethon
             wrapped_client = self._wrap_client_for_pytgcalls(client)
+            logger.info(f"Wrapped client created: {wrapped_client.__class__.__module__}")
+            
             self._call_py = PyTgCalls(wrapped_client)
+            logger.info("PyTgCalls instance created successfully")
             asyncio.create_task(self._start_pytgcalls())
-        except ImportError:
-            logger.warning("pytgcalls not installed")
+        except ImportError as e:
+            logger.exception(f"ImportError during pytgcalls init: {e}")
             self._call_py = None
         except Exception as e:
             logger.exception(f"Failed to initialize PyTgCalls: {e}")
