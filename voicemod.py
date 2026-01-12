@@ -72,8 +72,16 @@ class VoiceModMod(loader.Module):
             
             logger.info("Initializing PyTgCalls...")
             
-            # Передаём клиент напрямую — Heroku уже подменил telethon на herokutl
-            self._call_py = PyTgCalls(client)
+            # pytgcalls проверяет client.__class__.__module__.split('.')[0]
+            # Должен быть 'telethon', 'pyrogram' или 'hydrogram'
+            # HerokutTL имеет 'herokutl' — нужна обёртка
+            wrapped_client = self._wrap_client(client)
+            
+            # Также нужно создать herokutl_client.py в pytgcalls
+            # потому что Heroku перехватывает import telethon -> herokutl
+            self._patch_pytgcalls()
+            
+            self._call_py = PyTgCalls(wrapped_client)
             logger.info("PyTgCalls instance created")
             
             asyncio.create_task(self._start_pytgcalls())
@@ -83,6 +91,44 @@ class VoiceModMod(loader.Module):
         except Exception as e:
             logger.exception(f"Failed to initialize PyTgCalls: {e}")
             self._call_py = None
+
+    def _wrap_client(self, client):
+        """Обёртка чтобы pytgcalls видел herokutl как telethon"""
+        class TelethonClientWrapper:
+            def __init__(self, original):
+                object.__setattr__(self, '_client', original)
+            
+            def __getattr__(self, name):
+                return getattr(object.__getattribute__(self, '_client'), name)
+            
+            def __setattr__(self, name, value):
+                if name == '_client':
+                    object.__setattr__(self, name, value)
+                else:
+                    setattr(object.__getattribute__(self, '_client'), name, value)
+        
+        TelethonClientWrapper.__module__ = 'telethon.client.telegramclient'
+        return TelethonClientWrapper(client)
+
+    def _patch_pytgcalls(self):
+        """Создаёт herokutl_client.py как копию telethon_client.py"""
+        import shutil
+        
+        try:
+            import pytgcalls
+            pytgcalls_path = os.path.dirname(pytgcalls.__file__)
+            mtproto_path = os.path.join(pytgcalls_path, "mtproto")
+            
+            src = os.path.join(mtproto_path, "telethon_client.py")
+            dst = os.path.join(mtproto_path, "herokutl_client.py")
+            
+            if os.path.exists(src) and not os.path.exists(dst):
+                shutil.copy2(src, dst)
+                logger.info(f"Created herokutl_client.py")
+            elif os.path.exists(dst):
+                logger.info("herokutl_client.py already exists")
+        except Exception as e:
+            logger.warning(f"Could not patch pytgcalls: {e}")
 
     async def _start_pytgcalls(self):
         """Запуск PyTgCalls в фоне"""
