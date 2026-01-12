@@ -302,40 +302,6 @@ class VoiceMod(loader.Module):
             await utils.answer(message, self.strings("error").format(str(e)))
             return None
 
-    @loader.command(ru_doc="— диагностика чата")
-    async def vdebugcmd(self, message: types.Message):
-        """Debug chat info for troubleshooting"""
-        try:
-            chat_id = message.chat_id
-            peer = message.peer_id
-            
-            # Get entity info
-            entity = None
-            entity_type = "unknown"
-            try:
-                entity = await message.client.get_entity(peer)
-                entity_type = type(entity).__name__
-            except Exception as e:
-                entity_type = f"error: {e}"
-            
-            full_id = _get_full_chat_id(chat_id) if chat_id else None
-            
-            info = (
-                f"<b>🔍 VoiceMod Debug</b>\n\n"
-                f"<b>chat_id:</b> <code>{chat_id}</code>\n"
-                f"<b>peer_id:</b> <code>{peer}</code>\n"
-                f"<b>full_id:</b> <code>{full_id}</code>\n"
-                f"<b>entity_type:</b> <code>{entity_type}</code>\n"
-                f"<b>call started:</b> <code>{self.call is not None}</code>\n"
-            )
-            
-            if entity and hasattr(entity, 'title'):
-                info += f"<b>title:</b> <code>{entity.title}</code>\n"
-            
-            await utils.answer(message, info)
-        except Exception as e:
-            await utils.answer(message, f"<b>Debug error:</b> <code>{e}</code>")
-
     @loader.command(ru_doc="[чат] — войти в войс-чат")
     async def vjoincmd(self, message: types.Message):
         """[chat] - Join voice chat"""
