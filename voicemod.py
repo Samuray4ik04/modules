@@ -3,120 +3,28 @@
     
     Модуль для воспроизведения аудио в голосовых чатах Telegram.
     Поддерживает YouTube, прямые ссылки и аудиофайлы.
-    
-    Обновлено для pytgcalls 3.x
 """
 
-__version__ = (2, 2, 0)
+__version__ = (3, 0, 0)
 # meta developer: @samuray43k @ai
 # meta pic: https://img.icons8.com/fluency/512/microphone.png
 # scope: hikka_only
 # requires: ffmpeg-python yt-dlp shazamio py-tgcalls
 
-import io
 import os
 import re
 import logging
 import asyncio
-import subprocess
-import sys
-import site
-import importlib
-from typing import Dict, Optional, Union
+import tempfile
+import wave
+from typing import Dict, Optional
 
 from .. import loader, utils
-from herokutl.types import Message
+
+# Импорты через telethon — Heroku автоматически подменит на herokutl
+from telethon.types import Message
 
 logger = logging.getLogger(__name__)
-
-# Глобальная переменная для правильного модуля pytgcalls
-_pytgcalls_module = None
-
-
-def _find_correct_pytgcalls():
-    """
-    Находит правильный py-tgcalls даже если установлен конфликтующий MarshalX/pytgcalls.
-    py-tgcalls имеет класс PyTgCalls, MarshalX — нет.
-    """
-    global _pytgcalls_module
-    
-    if _pytgcalls_module is not None:
-        return _pytgcalls_module
-    
-    # Сначала пробуем обычный импорт
-    try:
-        import pytgcalls
-        if hasattr(pytgcalls, 'PyTgCalls'):
-            _pytgcalls_module = pytgcalls
-            logger.info("Found py-tgcalls via direct import")
-            return pytgcalls
-    except ImportError:
-        pass
-    
-    # Если не нашли PyTgCalls — ищем в user site-packages
-    user_site = site.getusersitepackages()
-    pytgcalls_paths = [
-        os.path.join(user_site, 'pytgcalls'),
-        os.path.expanduser('~/.local/lib/python3.10/site-packages/pytgcalls'),
-        os.path.expanduser('~/.local/lib/python3.11/site-packages/pytgcalls'),
-        os.path.expanduser('~/.local/lib/python3.12/site-packages/pytgcalls'),
-    ]
-    
-    for path in pytgcalls_paths:
-        if os.path.isdir(path):
-            parent = os.path.dirname(path)
-            if parent not in sys.path:
-                sys.path.insert(0, parent)
-            
-            # Перезагружаем модуль
-            if 'pytgcalls' in sys.modules:
-                del sys.modules['pytgcalls']
-            
-            # Удаляем все субмодули pytgcalls
-            to_delete = [k for k in sys.modules.keys() if k.startswith('pytgcalls')]
-            for k in to_delete:
-                del sys.modules[k]
-            
-            try:
-                import pytgcalls
-                if hasattr(pytgcalls, 'PyTgCalls'):
-                    _pytgcalls_module = pytgcalls
-                    logger.info(f"Found py-tgcalls in {parent}")
-                    return pytgcalls
-            except Exception as e:
-                logger.debug(f"Failed to import from {parent}: {e}")
-                continue
-    
-    return None
-
-
-def ensure_pytgcalls():
-    """Проверяет/устанавливает py-tgcalls"""
-    module = _find_correct_pytgcalls()
-    if module is not None:
-        return True
-    
-    logger.info("py-tgcalls not found, installing...")
-    try:
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install", 
-            "py-tgcalls", "-q", "--user", "--force-reinstall"
-        ])
-        logger.info("py-tgcalls installed successfully")
-        
-        # Пробуем найти после установки
-        return _find_correct_pytgcalls() is not None
-    except Exception as e:
-        logger.error(f"Failed to install py-tgcalls: {e}")
-        return False
-
-
-def get_pytgcalls():
-    """Возвращает модуль py-tgcalls"""
-    global _pytgcalls_module
-    if _pytgcalls_module is None:
-        _find_correct_pytgcalls()
-    return _pytgcalls_module
 
 
 @loader.tds
@@ -158,102 +66,23 @@ class VoiceModMod(loader.Module):
         self._client = client
         self._db = db
         
-        # Автоустановка py-tgcalls если не установлен
-        if not ensure_pytgcalls():
-            logger.error("Could not install py-tgcalls")
-            self._call_py = None
-            return
-        
         try:
-            # Используем нашу функцию поиска правильного модуля
-            pytgcalls_mod = get_pytgcalls()
-            if pytgcalls_mod is None:
-                logger.warning("py-tgcalls not found (PyTgCalls class missing)")
-                self._call_py = None
-                return
+            from pytgcalls import PyTgCalls
+            from pytgcalls.types import MediaStream
             
-            logger.info(f"pytgcalls module: {pytgcalls_mod}")
-            logger.info(f"pytgcalls location: {getattr(pytgcalls_mod, '__file__', 'unknown')}")
+            logger.info("Initializing PyTgCalls...")
             
-            if not hasattr(pytgcalls_mod, 'PyTgCalls'):
-                logger.error(f"PyTgCalls class not found in module. Available: {dir(pytgcalls_mod)}")
-                self._call_py = None
-                return
-            
-            # ВАЖНО: Heroku перехватывает import "telethon" -> "herokutl"
-            # pytgcalls пытается: from .telethon_client import TelethonClient
-            # Heroku ломает это: from .herokutl_client import ... (не существует)
-            # Решение: создаём herokutl_client.py как алиас для telethon_client.py
-            self._patch_pytgcalls_for_heroku(pytgcalls_mod)
-            
-            PyTgCalls = pytgcalls_mod.PyTgCalls
-            logger.info(f"PyTgCalls class: {PyTgCalls}")
-            
-            # Создаём обёртку для HerokutTL, чтобы pytgcalls распознал его как Telethon
-            wrapped_client = self._wrap_client_for_pytgcalls(client)
-            logger.info(f"Wrapped client created: {wrapped_client.__class__.__module__}")
-            
-            self._call_py = PyTgCalls(wrapped_client)
-            logger.info("PyTgCalls instance created successfully")
+            # Передаём клиент напрямую — Heroku уже подменил telethon на herokutl
+            self._call_py = PyTgCalls(client)
+            logger.info("PyTgCalls instance created")
             
             asyncio.create_task(self._start_pytgcalls())
         except ImportError as e:
-            logger.exception(f"ImportError during pytgcalls init: {e}")
+            logger.warning(f"pytgcalls not available: {e}")
             self._call_py = None
         except Exception as e:
             logger.exception(f"Failed to initialize PyTgCalls: {e}")
             self._call_py = None
-
-    def _patch_pytgcalls_for_heroku(self, pytgcalls_mod):
-        """
-        Создаёт herokutl_client.py в pytgcalls/mtproto/ как алиас для telethon_client.py
-        Это нужно потому что Heroku перехватывает все импорты telethon -> herokutl
-        """
-        import os
-        import shutil
-        
-        pytgcalls_path = os.path.dirname(pytgcalls_mod.__file__)
-        mtproto_path = os.path.join(pytgcalls_path, "mtproto")
-        
-        telethon_client = os.path.join(mtproto_path, "telethon_client.py")
-        herokutl_client = os.path.join(mtproto_path, "herokutl_client.py")
-        
-        if os.path.exists(telethon_client) and not os.path.exists(herokutl_client):
-            try:
-                # Копируем telethon_client.py -> herokutl_client.py
-                shutil.copy2(telethon_client, herokutl_client)
-                logger.info(f"Created herokutl_client.py patch at {herokutl_client}")
-            except Exception as e:
-                logger.warning(f"Could not create herokutl_client.py: {e}")
-        elif os.path.exists(herokutl_client):
-            logger.info("herokutl_client.py patch already exists")
-
-    def _wrap_client_for_pytgcalls(self, client):
-        """
-        Оборачивает HerokutTL клиент так, чтобы pytgcalls распознал его как Telethon.
-        pytgcalls проверяет client.__class__.__module__.split('.')[0] == 'telethon'
-        """
-        # Создаём класс-обёртку с подменённым __module__
-        class TelethonClientWrapper:
-            """Wrapper that makes HerokutTL look like Telethon for pytgcalls"""
-            
-            def __init__(self, original_client):
-                self._client = original_client
-                # Копируем все атрибуты оригинального клиента
-                
-            def __getattr__(self, name):
-                return getattr(self._client, name)
-            
-            def __setattr__(self, name, value):
-                if name == '_client':
-                    object.__setattr__(self, name, value)
-                else:
-                    setattr(self._client, name, value)
-        
-        # Подменяем __module__ на telethon
-        TelethonClientWrapper.__module__ = 'telethon.client.telegramclient'
-        
-        return TelethonClientWrapper(client)
 
     async def _start_pytgcalls(self):
         """Запуск PyTgCalls в фоне"""
@@ -285,6 +114,19 @@ class VoiceModMod(loader.Module):
         """Проверка доступности pytgcalls"""
         return self._call_py is not None
 
+    def _create_silent_wav(self) -> str:
+        """Создаёт временный WAV-файл с тишиной"""
+        fd, path = tempfile.mkstemp(suffix='.wav')
+        os.close(fd)
+        
+        with wave.open(path, 'wb') as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(48000)
+            wav.writeframes(b'\x00\x00' * 48000)  # 1 секунда тишины
+        
+        return path
+
     @loader.command(ru_doc="[чат] — подключиться к голосовому чату")
     async def vjoincmd(self, message: Message):
         """Join voice chat"""
@@ -296,30 +138,15 @@ class VoiceModMod(loader.Module):
             return
         
         try:
-            # py-tgcalls 2.x требует реальный медиафайл для подключения
-            # Создаём тихий аудиофайл (1 секунда тишины)
-            import tempfile
-            import struct
-            import wave
+            from pytgcalls.types import MediaStream
             
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
-                silent_file = f.name
-                # Создаём WAV с 1 секундой тишины
-                with wave.open(f.name, 'wb') as wav:
-                    wav.setnchannels(1)
-                    wav.setsampwidth(2)
-                    wav.setframerate(48000)
-                    # 1 секунда тишины
-                    wav.writeframes(b'\x00\x00' * 48000)
-            
-            pytgcalls_mod = get_pytgcalls()
-            MediaStream = pytgcalls_mod.types.MediaStream
+            silent_file = self._create_silent_wav()
             
             await self._call_py.play(chat_id, MediaStream(silent_file))
             self._active_chats[chat_id] = True
             await utils.answer(message, self.strings("join"))
             
-            # Удаляем временный файл после подключения
+            # Удаляем временный файл
             try:
                 os.remove(silent_file)
             except:
@@ -380,16 +207,13 @@ class VoiceModMod(loader.Module):
             return await utils.answer(message, self.strings("no_audio"))
         
         try:
-            pytgcalls_mod = get_pytgcalls()
-            MediaStream = pytgcalls_mod.types.MediaStream
+            from pytgcalls.types import MediaStream
             
             message = await utils.answer(message, self.strings("downloading"))
             
             if audio_file:
-                # Скачиваем аудиофайл
                 file_path = await audio_file.download_media()
             else:
-                # Используем yt-dlp для YouTube и других источников
                 import yt_dlp
                 
                 ydl_opts = {
@@ -410,11 +234,7 @@ class VoiceModMod(loader.Module):
             
             message = await utils.answer(message, self.strings("playing"))
             
-            # Воспроизведение
-            await self._call_py.play(
-                chat_id,
-                MediaStream(file_path),
-            )
+            await self._call_py.play(chat_id, MediaStream(file_path))
             self._active_chats[chat_id] = True
             
         except Exception as e:
@@ -556,10 +376,8 @@ class VoiceModMod(loader.Module):
             
             message = await utils.answer(message, self.strings("recognizing"))
             
-            # Скачиваем аудио
             audio_data = await reply.download_media(bytes)
             
-            # Распознаём
             shazam = Shazam()
             result = await shazam.recognize(audio_data)
             
@@ -570,7 +388,6 @@ class VoiceModMod(loader.Module):
             title = track.get("title", "Unknown")
             artist = track.get("subtitle", "Unknown")
             
-            # Получаем обложку если есть
             cover_url = None
             if "images" in track:
                 cover_url = track["images"].get("coverart")
