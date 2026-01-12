@@ -130,13 +130,42 @@ class VoiceModMod(loader.Module):
                 content = content.replace('from telethon', 'from herokutl')
                 content = content.replace('import telethon', 'import herokutl')
                 
-                # ГЛАВНЫЙ ПАТЧ: herokutl UpdateGroupCall имеет 'peer' вместо 'chat_id'
-                # telethon: update.chat_id
-                # herokutl: update.peer (нужно извлечь id из peer)
-                content = content.replace(
-                    'update.chat_id,',
-                    '(update.peer.channel_id if hasattr(update.peer, "channel_id") else getattr(update.peer, "chat_id", 0)) if update.peer else 0,'
-                )
+                # ГЛАВНЫЙ ПАТЧ: полностью переписываем обработку UpdateGroupCall
+                # herokutl имеет peer вместо chat_id
+                old_block = '''if isinstance(
+                update,
+                UpdateGroupCall,
+            ):
+                chat_id = self.chat_id(
+                    await self._get_entity_group(
+                        update.chat_id,
+                    ),
+                )'''
+                
+                new_block = '''if isinstance(
+                update,
+                UpdateGroupCall,
+            ):
+                # herokutl compatibility patch
+                try:
+                    if hasattr(update, 'peer') and update.peer:
+                        if hasattr(update.peer, 'channel_id'):
+                            raw_id = update.peer.channel_id
+                        elif hasattr(update.peer, 'chat_id'):
+                            raw_id = update.peer.chat_id
+                        else:
+                            return
+                    elif hasattr(update, 'chat_id'):
+                        raw_id = update.chat_id
+                    else:
+                        return
+                    chat_id = self.chat_id(
+                        await self._get_entity_group(raw_id),
+                    )
+                except Exception:
+                    return'''
+                
+                content = content.replace(old_block, new_block)
                 
                 # Записываем
                 with open(dst, 'w') as f:
