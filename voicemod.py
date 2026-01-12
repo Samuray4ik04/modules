@@ -187,8 +187,29 @@ class VoiceModMod(loader.Module):
             wrapped_client = self._wrap_client_for_pytgcalls(client)
             logger.info(f"Wrapped client created: {wrapped_client.__class__.__module__}")
             
-            self._call_py = PyTgCalls(wrapped_client)
-            logger.info("PyTgCalls instance created successfully")
+            # ВАЖНО: Временно отключаем patched_import Heroku при инициализации pytgcalls
+            # Heroku перехватывает import "telethon" -> "herokutl", что ломает pytgcalls
+            import builtins
+            original_import = builtins.__import__
+            
+            def safe_import(name, *args, **kwargs):
+                # Для pytgcalls.mtproto.telethon_client — используем оригинальный import
+                if 'telethon_client' in name or name.startswith('pytgcalls'):
+                    # Пробуем native import напрямую
+                    import importlib
+                    try:
+                        return importlib.import_module(name)
+                    except:
+                        pass
+                return original_import(name, *args, **kwargs)
+            
+            try:
+                builtins.__import__ = safe_import
+                self._call_py = PyTgCalls(wrapped_client)
+                logger.info("PyTgCalls instance created successfully")
+            finally:
+                builtins.__import__ = original_import
+            
             asyncio.create_task(self._start_pytgcalls())
         except ImportError as e:
             logger.exception(f"ImportError during pytgcalls init: {e}")
