@@ -112,7 +112,6 @@ class VoiceModMod(loader.Module):
 
     def _patch_pytgcalls(self):
         """Создаёт и патчит herokutl_client.py для совместимости с herokutl"""
-        import shutil
         
         try:
             import pytgcalls
@@ -131,20 +130,40 @@ class VoiceModMod(loader.Module):
                 content = content.replace('from telethon', 'from herokutl')
                 content = content.replace('import telethon', 'import herokutl')
                 
-                # Фикс для UpdateGroupCall.chat_id -> UpdateGroupCall.call
+                # Патчим on_update для безопасной обработки UpdateGroupCall
                 # herokutl может иметь другую структуру
-                # Добавляем безопасную обработку
-                old_handler = 'update.chat_id,'
-                new_handler = 'getattr(update, "chat_id", None) or getattr(getattr(update, "call", None), "chat_id", None),'
-                content = content.replace(old_handler, new_handler)
+                old_on_update = '''async def on_update(update):
+            if isinstance(
+                update,
+                UpdateGroupCall,
+            ):
+                self._cache.set_cache(
+                    update.chat_id,'''
+                
+                new_on_update = '''async def on_update(update):
+            if isinstance(
+                update,
+                UpdateGroupCall,
+            ):
+                # herokutl compatibility: chat_id may be in different places
+                try:
+                    chat_id = getattr(update, 'chat_id', None)
+                    if chat_id is None and hasattr(update, 'call'):
+                        chat_id = getattr(update.call, 'chat_id', None)
+                    if chat_id is None:
+                        return  # Skip if can't get chat_id
+                except:
+                    return
+                self._cache.set_cache(
+                    chat_id,'''
+                
+                content = content.replace(old_on_update, new_on_update)
                 
                 # Записываем
                 with open(dst, 'w') as f:
                     f.write(content)
                 
                 logger.info(f"Created/updated herokutl_client.py with patches")
-            elif os.path.exists(dst):
-                logger.info("herokutl_client.py already exists")
         except Exception as e:
             logger.warning(f"Could not patch pytgcalls: {e}")
 
