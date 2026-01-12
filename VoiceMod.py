@@ -78,9 +78,41 @@ class _ClientWrapper:
 
 
 def _get_full_chat_id(chat_id: int) -> int:
+    """Convert chat_id to py-tgcalls format (-100XXXXXXXXXX)"""
+    if chat_id is None:
+        return None
+    # Already in correct format
+    if chat_id < 0 and str(chat_id).startswith("-100"):
+        return chat_id
+    # Positive large ID (channel/supergroup without prefix)
     if chat_id > 0 and chat_id > 1000000000:
         return int(f"-100{chat_id}")
+    # Negative but not -100 format (old style group)
+    if chat_id < 0 and not str(chat_id).startswith("-100"):
+        # Convert -XXXX to -100XXXX
+        return int(f"-100{abs(chat_id)}")
     return chat_id
+
+
+async def _get_chat_for_call(client, message) -> tuple:
+    """Get chat_id and check if voice chat is supported. Returns (chat_id, error_msg)"""
+    from telethon.tl.types import Chat, Channel
+    
+    chat_id = message.chat_id
+    if not chat_id:
+        return None, "no_chat"
+    
+    try:
+        entity = await client.get_entity(message.peer_id)
+    except Exception:
+        entity = None
+    
+    # Check if it's a basic group (not supergroup)
+    if isinstance(entity, Chat):
+        # Basic groups need to be converted to supergroup for voice chats
+        return None, "not_supergroup"
+    
+    return _get_full_chat_id(chat_id), None
 
 
 @loader.tds
@@ -100,6 +132,7 @@ class VoiceMod(loader.Module):
         "error": "<b>[VoiceMod]</b> Error: <code>{}</code>",
         "no_audio": "<b>[VoiceMod]</b> No audio/link provided",
         "no_chat": "<b>[VoiceMod]</b> Use this command in a group/channel with voice chat",
+        "not_supergroup": "<b>[VoiceMod]</b> Voice chats only work in supergroups/channels. Convert this group to supergroup first (enable chat history or add a bot)",
         "recognized": "<b>[Shazam]</b> {}",
         "not_recognized": "<b>[Shazam]</b> Could not recognize",
         "reply_audio": "<b>[Shazam]</b> Reply to audio",
@@ -130,6 +163,7 @@ class VoiceMod(loader.Module):
         "searching": "<b>[VoiceMod]</b> Поиск...",
         "not_found": "<b>[VoiceMod]</b> Не найдено: <code>{}</code>",
         "no_chat": "<b>[VoiceMod]</b> Используй эту команду в группе/канале с войс-чатом",
+        "not_supergroup": "<b>[VoiceMod]</b> Войс-чаты работают только в супергруппах/каналах. Преобразуй группу в супергруппу (включи историю чата или добавь бота)",
         "cookies_set": "<b>[VoiceMod]</b> Cookies сохранены! Файл: <code>{}</code>",
         "cookies_cleared": "<b>[VoiceMod]</b> Cookies удалены",
         "cookies_info": "<b>[VoiceMod]</b> Текущий файл cookies: <code>{}</code>",
@@ -225,11 +259,12 @@ class VoiceMod(loader.Module):
     async def _get_chat(self, message: types.Message):
         args = utils.get_args_raw(message)
         if not args:
-            chat_id = message.chat_id
-            if not chat_id:
-                await utils.answer(message, self.strings("no_chat"))
+            # Use helper function to check chat type
+            chat_id, error = await _get_chat_for_call(message.client, message)
+            if error:
+                await utils.answer(message, self.strings(error))
                 return None
-            return _get_full_chat_id(chat_id)
+            return chat_id
         try:
             chat = int(args)
         except ValueError:
@@ -309,10 +344,10 @@ class VoiceMod(loader.Module):
         args = utils.get_args_raw(message)
         reply = await message.get_reply_message()
         
-        chat_id = message.chat_id
-        if not chat_id:
-            return await utils.answer(message, self.strings("no_chat"))
-        chat = _get_full_chat_id(chat_id)
+        # Check chat type
+        chat, error = await _get_chat_for_call(message.client, message)
+        if error:
+            return await utils.answer(message, self.strings(error))
         
         video_file = None
         from_reply = reply and reply.media
