@@ -99,6 +99,7 @@ class VoiceMod(loader.Module):
         "unmute": "<b>[VoiceMod]</b> Unmuted!",
         "error": "<b>[VoiceMod]</b> Error: <code>{}</code>",
         "no_audio": "<b>[VoiceMod]</b> No audio/link provided",
+        "no_chat": "<b>[VoiceMod]</b> Use this command in a group/channel with voice chat",
         "recognized": "<b>[Shazam]</b> {}",
         "not_recognized": "<b>[Shazam]</b> Could not recognize",
         "reply_audio": "<b>[Shazam]</b> Reply to audio",
@@ -128,6 +129,7 @@ class VoiceMod(loader.Module):
         "reply_audio": "<b>[Shazam]</b> Реплай на аудио",
         "searching": "<b>[VoiceMod]</b> Поиск...",
         "not_found": "<b>[VoiceMod]</b> Не найдено: <code>{}</code>",
+        "no_chat": "<b>[VoiceMod]</b> Используй эту команду в группе/канале с войс-чатом",
         "cookies_set": "<b>[VoiceMod]</b> Cookies сохранены! Файл: <code>{}</code>",
         "cookies_cleared": "<b>[VoiceMod]</b> Cookies удалены",
         "cookies_info": "<b>[VoiceMod]</b> Текущий файл cookies: <code>{}</code>",
@@ -223,7 +225,11 @@ class VoiceMod(loader.Module):
     async def _get_chat(self, message: types.Message):
         args = utils.get_args_raw(message)
         if not args:
-            return _get_full_chat_id(message.chat_id)
+            chat_id = message.chat_id
+            if not chat_id:
+                await utils.answer(message, self.strings("no_chat"))
+                return None
+            return _get_full_chat_id(chat_id)
         try:
             chat = int(args)
         except ValueError:
@@ -268,7 +274,11 @@ class VoiceMod(loader.Module):
         """<link/reply> - Play video+audio"""
         args = utils.get_args_raw(message)
         reply = await message.get_reply_message()
-        chat = _get_full_chat_id(message.chat_id)
+        
+        chat_id = message.chat_id
+        if not chat_id:
+            return await utils.answer(message, self.strings("no_chat"))
+        chat = _get_full_chat_id(chat_id)
         
         video_file = None
         from_reply = reply and reply.media
