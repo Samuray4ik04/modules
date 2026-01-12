@@ -1,8 +1,39 @@
 # requires: py-tgcalls yt-dlp ShazamAPI aiohttp
 
-__version__ = (2, 1, 0)
+__version__ = (2, 2, 0)
 # meta developer: @samuray43k, @ai
 # scope: hikka_only
+
+# ============================================================
+# CRITICAL: Version spoofing MUST happen BEFORE any imports!
+# py-tgcalls checks telethon version and blocks if < 1.24.0
+# HerokutTL reports 1.7.2 but is actually a modern fork
+# ============================================================
+import sys
+
+def _spoof_telethon_version():
+    """Spoof telethon version BEFORE py-tgcalls can check it"""
+    target_version = "1.37.0"
+    
+    # If telethon/herokutl already imported, patch version
+    for mod_name in ['telethon', 'herokutl']:
+        if mod_name in sys.modules:
+            sys.modules[mod_name].__version__ = target_version
+    
+    # Also ensure any future import sees correct version
+    class _VersionSpoofer:
+        __version__ = target_version
+        def __getattr__(self, name):
+            # Lazy-load real module on attribute access
+            import herokutl
+            herokutl.__version__ = target_version
+            return getattr(herokutl, name)
+    
+    if 'telethon' not in sys.modules:
+        sys.modules['telethon'] = _VersionSpoofer()
+
+_spoof_telethon_version()
+# ============================================================
 
 import os
 import logging
@@ -22,7 +53,9 @@ DEFAULT_COOKIES_URL = "https://gist.githubusercontent.com/Samuray4ik04/d85f029ad
 
 
 def _patch_pytgcalls_for_heroku():
+    """Patch py-tgcalls mtproto files for HerokutTL compatibility"""
     try:
+        # Patch pytgcalls mtproto client files
         import pytgcalls
         mtproto_path = os.path.dirname(pytgcalls.mtproto.__file__)
         herokutl_client = os.path.join(mtproto_path, "herokutl_client.py")
