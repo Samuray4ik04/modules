@@ -7,23 +7,44 @@
     Обновлено для pytgcalls 3.x
 """
 
-__version__ = (2, 0, 0)
-# meta developer: @D4n1l3k300 @Yahikor0
+__version__ = (2, 1, 0)
+# meta developer: @samuray43k @ai
 # meta pic: https://img.icons8.com/fluency/512/microphone.png
 # scope: hikka_only
-# requires: ffmpeg-python py-tgcalls yt-dlp shazamio
+# requires: ffmpeg-python yt-dlp shazamio
 
 import io
 import os
 import re
 import logging
 import asyncio
+import subprocess
+import sys
 from typing import Dict, Optional, Union
 
 from .. import loader, utils
 from herokutl.types import Message
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_pytgcalls():
+    """Устанавливает py-tgcalls если не установлен"""
+    try:
+        import pytgcalls
+        return True
+    except ImportError:
+        logger.info("Installing py-tgcalls...")
+        try:
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install", 
+                "py-tgcalls", "-q", "--user"
+            ])
+            logger.info("py-tgcalls installed successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to install py-tgcalls: {e}")
+            return False
 
 
 @loader.tds
@@ -64,6 +85,12 @@ class VoiceModMod(loader.Module):
     async def client_ready(self, client, db):
         self._client = client
         self._db = db
+        
+        # Автоустановка py-tgcalls если не установлен
+        if not ensure_pytgcalls():
+            logger.error("Could not install py-tgcalls")
+            self._call_py = None
+            return
         
         try:
             from pytgcalls import PyTgCalls
