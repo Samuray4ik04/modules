@@ -171,19 +171,23 @@ class VoiceModMod(loader.Module):
         else:
             chat_id = utils.get_chat_id(message)
         
-        # pytgcalls ожидает полный ID с -100 префиксом для каналов/супергрупп
-        # utils.get_chat_id() может возвращать без префикса
+        # pytgcalls проверяет: is_p2p = chat_id > 0
+        # Для group calls нужен ОТРИЦАТЕЛЬНЫЙ chat_id
+        # Формат: -100XXXXXXXXXX для каналов/супергрупп
         if chat_id and chat_id > 0:
-            # Это может быть канал/супергруппа без префикса
             try:
                 entity = await message.client.get_entity(message.peer_id)
+                # Канал или супергруппа
                 if hasattr(entity, 'broadcast') or hasattr(entity, 'megagroup'):
-                    # Это канал или супергруппа — нужен -100 префикс
-                    if chat_id > 0:
-                        chat_id = -1000000000000 - chat_id
+                    chat_id = int(f"-100{chat_id}")
+                # Обычная группа  
+                elif hasattr(entity, 'chat_id') or (hasattr(entity, 'id') and not hasattr(entity, 'username')):
+                    chat_id = -chat_id
             except:
-                pass
+                # Если не получилось определить тип, пробуем как супергруппу
+                chat_id = int(f"-100{chat_id}")
         
+        logger.info(f"Resolved chat_id: {chat_id}")
         return chat_id
 
     def _check_pytgcalls(self) -> bool:
