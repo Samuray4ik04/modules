@@ -142,7 +142,8 @@ class VoiceModMod(loader.Module):
                 
                 # ГЛАВНЫЙ ПАТЧ: полностью переписываем обработку UpdateGroupCall
                 # herokutl имеет peer вместо chat_id
-                old_block = '''if isinstance(
+                # Отступы: 12 пробелов для основного блока, 16 для вложенного
+                old_block = """            if isinstance(
                 update,
                 UpdateGroupCall,
             ):
@@ -150,9 +151,9 @@ class VoiceModMod(loader.Module):
                     await self._get_entity_group(
                         update.chat_id,
                     ),
-                )'''
+                )"""
                 
-                new_block = '''if isinstance(
+                new_block = """            if isinstance(
                 update,
                 UpdateGroupCall,
             ):
@@ -173,7 +174,7 @@ class VoiceModMod(loader.Module):
                         await self._get_entity_group(raw_id),
                     )
                 except Exception:
-                    return'''
+                    return"""
                 
                 content = content.replace(old_block, new_block)
                 
