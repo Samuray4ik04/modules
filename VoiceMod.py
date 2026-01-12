@@ -1,0 +1,421 @@
+# requires: py-tgcalls yt-dlp ShazamAPI
+
+__version__ = (2, 0, 0)
+# meta developer: @samuray43k, @ai
+# scope: hikka_only
+
+import os
+import logging
+import asyncio
+
+from ShazamAPI import Shazam
+from yt_dlp import YoutubeDL
+from telethon import types
+
+from .. import loader, utils
+
+logger = logging.getLogger(__name__)
+
+
+def _patch_pytgcalls_for_heroku():
+    try:
+        import pytgcalls
+        mtproto_path = os.path.dirname(pytgcalls.mtproto.__file__)
+        herokutl_client = os.path.join(mtproto_path, "herokutl_client.py")
+        telethon_client = os.path.join(mtproto_path, "telethon_client.py")
+        
+        if not os.path.exists(telethon_client):
+            return
+        
+        with open(telethon_client, "r") as f:
+            content = f.read()
+        
+        patched = content.replace("from telethon", "from herokutl")
+        patched = patched.replace(
+            "update.chat_id",
+            "(update.chat_id if hasattr(update, 'chat_id') else getattr(getattr(update, 'peer', None), 'channel_id', 0))"
+        )
+        
+        with open(herokutl_client, "w") as f:
+            f.write(patched)
+        
+        cache_dir = os.path.join(mtproto_path, "__pycache__")
+        if os.path.exists(cache_dir):
+            import shutil
+            shutil.rmtree(cache_dir, ignore_errors=True)
+            
+    except Exception as e:
+        logger.warning(f"Heroku patch failed: {e}")
+
+
+_patch_pytgcalls_for_heroku()
+
+from pytgcalls import PyTgCalls
+from pytgcalls import filters as fl
+from pytgcalls.types import MediaStream, AudioQuality, VideoQuality, StreamEnded, ChatUpdate
+from pytgcalls.types.raw import Stream
+
+
+class _ClientWrapper:
+    def __init__(self, client):
+        self._client = client
+        for attr in dir(client):
+            if not attr.startswith('_'):
+                try:
+                    setattr(self, attr, getattr(client, attr))
+                except Exception:
+                    pass
+    
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+    
+    @property
+    def __class__(self):
+        class FakeTelethonClient:
+            __module__ = "telethon.client.telegramclient"
+            __name__ = "TelegramClient"
+        return FakeTelethonClient
+
+
+def _get_full_chat_id(chat_id: int) -> int:
+    if chat_id > 0 and chat_id > 1000000000:
+        return int(f"-100{chat_id}")
+    return chat_id
+
+
+@loader.tds
+class VoiceMod(loader.Module):
+    strings = {
+        "name": "VoiceMod",
+        "downloading": "<b>[VoiceMod]</b> Downloading...",
+        "playing": "<b>[VoiceMod]</b> Playing...",
+        "plsjoin": "<b>[VoiceMod]</b> Not in voice chat. Use .vjoin first",
+        "stop": "<b>[VoiceMod]</b> Stopped!",
+        "join": "<b>[VoiceMod]</b> Joined!",
+        "leave": "<b>[VoiceMod]</b> Left!",
+        "pause": "<b>[VoiceMod]</b> Paused!",
+        "resume": "<b>[VoiceMod]</b> Resumed!",
+        "mute": "<b>[VoiceMod]</b> Muted!",
+        "unmute": "<b>[VoiceMod]</b> Unmuted!",
+        "error": "<b>[VoiceMod]</b> Error: <code>{}</code>",
+        "no_audio": "<b>[VoiceMod]</b> No audio/link provided",
+        "recognized": "<b>[Shazam]</b> {}",
+        "not_recognized": "<b>[Shazam]</b> Could not recognize",
+        "reply_audio": "<b>[Shazam]</b> Reply to audio",
+        "searching": "<b>[VoiceMod]</b> Searching...",
+        "not_found": "<b>[VoiceMod]</b> Not found: <code>{}</code>",
+        "cookies_set": "<b>[VoiceMod]</b> Cookies saved! File: <code>{}</code>",
+        "cookies_cleared": "<b>[VoiceMod]</b> Cookies cleared",
+        "cookies_info": "<b>[VoiceMod]</b> Current cookies: <code>{}</code>",
+        "cookies_not_set": "<b>[VoiceMod]</b> Cookies not set. Use <code>.vcookies</code> + reply to txt file",
+    }
+
+    strings_ru = {
+        "downloading": "<b>[VoiceMod]</b> Скачивание...",
+        "playing": "<b>[VoiceMod]</b> Воспроизведение...",
+        "plsjoin": "<b>[VoiceMod]</b> Сначала .vjoin",
+        "stop": "<b>[VoiceMod]</b> Остановлено!",
+        "join": "<b>[VoiceMod]</b> Подключён!",
+        "leave": "<b>[VoiceMod]</b> Отключён!",
+        "pause": "<b>[VoiceMod]</b> Пауза!",
+        "resume": "<b>[VoiceMod]</b> Продолжено!",
+        "mute": "<b>[VoiceMod]</b> Заглушено!",
+        "unmute": "<b>[VoiceMod]</b> Звук вкл!",
+        "error": "<b>[VoiceMod]</b> Ошибка: <code>{}</code>",
+        "no_audio": "<b>[VoiceMod]</b> Укажи ссылку или реплай",
+        "recognized": "<b>[Shazam]</b> {}",
+        "not_recognized": "<b>[Shazam]</b> Не распознано",
+        "reply_audio": "<b>[Shazam]</b> Реплай на аудио",
+        "searching": "<b>[VoiceMod]</b> Поиск...",
+        "not_found": "<b>[VoiceMod]</b> Не найдено: <code>{}</code>",
+        "cookies_set": "<b>[VoiceMod]</b> Cookies сохранены! Файл: <code>{}</code>",
+        "cookies_cleared": "<b>[VoiceMod]</b> Cookies удалены",
+        "cookies_info": "<b>[VoiceMod]</b> Текущий файл cookies: <code>{}</code>",
+        "cookies_not_set": "<b>[VoiceMod]</b> Cookies не установлены. Используй <code>.vcookies</code> + реплай на txt файл",
+    }
+
+    ytdlopts = {
+        'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
+        'geo_bypass': True,
+        'nocheckcertificate': True,
+        'merge_output_format': 'mp4',
+        'postprocessors': [{
+            'key': 'FFmpegVideoConvertor',
+            'preferedformat': 'mp4',
+        }],
+        'outtmpl': 'ytdl_out.%(ext)s',
+        'quiet': True,
+        'no_warnings': True,
+    }
+
+    def __init__(self):
+        self.call = None
+        self.active_chats = set()
+        self.cookies_file = None
+
+    async def client_ready(self, client, db):
+        self._client = client
+        self._db = db
+        self.cookies_file = self.get("cookies_file", None)
+        
+        wrapped = _ClientWrapper(client)
+        self.call = PyTgCalls(wrapped)
+        
+        @self.call.on_update(fl.stream_end())
+        async def on_stream_end(_, update: StreamEnded):
+            try:
+                await self.call.leave_call(update.chat_id)
+                self.active_chats.discard(update.chat_id)
+            except Exception:
+                pass
+        
+        @self.call.on_update(fl.chat_update(ChatUpdate.Status.LEFT_CALL))
+        async def on_left(_, update: ChatUpdate):
+            self.active_chats.discard(update.chat_id)
+        
+        try:
+            await self.call.start()
+        except Exception as e:
+            logger.exception(e)
+
+    async def on_unload(self):
+        if self.call:
+            try:
+                await self.call.stop()
+            except Exception:
+                pass
+
+    async def _get_chat(self, message: types.Message):
+        args = utils.get_args_raw(message)
+        if not args:
+            return _get_full_chat_id(message.chat_id)
+        try:
+            chat = int(args)
+        except ValueError:
+            chat = args
+        try:
+            entity = await message.client.get_entity(chat)
+            return _get_full_chat_id(entity.id)
+        except Exception as e:
+            await utils.answer(message, self.strings("error").format(str(e)))
+            return None
+
+    @loader.command(ru_doc="[чат] — войти в войс-чат")
+    async def vjoincmd(self, message: types.Message):
+        chat = await self._get_chat(message)
+        if chat is None:
+            return
+        
+        try:
+            await self.call.play(chat, Stream())
+            self.active_chats.add(chat)
+            await utils.answer(message, self.strings("join"))
+        except Exception as e:
+            await utils.answer(message, self.strings("error").format(str(e)))
+
+    @loader.command(ru_doc="[чат] — выйти из войс-чата")
+    async def vleavecmd(self, message: types.Message):
+        chat = await self._get_chat(message)
+        if chat is None:
+            return
+        
+        try:
+            await self.call.leave_call(chat)
+            self.active_chats.discard(chat)
+            await utils.answer(message, self.strings("leave"))
+        except Exception as e:
+            await utils.answer(message, self.strings("error").format(str(e)))
+
+    @loader.command(ru_doc="<ссылка/реплай> — воспроизвести видео+аудио")
+    async def vplaycmd(self, message: types.Message):
+        args = utils.get_args_raw(message)
+        reply = await message.get_reply_message()
+        chat = _get_full_chat_id(message.chat_id)
+        
+        video_file = None
+        from_reply = reply and reply.media
+        
+        if not from_reply and not args:
+            return await utils.answer(message, self.strings("no_audio"))
+        
+        message = await utils.answer(message, self.strings("downloading"))
+        
+        try:
+            if from_reply:
+                video_file = await reply.download_media()
+            else:
+                if os.path.exists('ytdl_video.mp4'):
+                    os.remove('ytdl_video.mp4')
+                opts = {
+                    'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]',
+                    'merge_output_format': 'mp4',
+                    'outtmpl': 'ytdl_video.%(ext)s',
+                    'quiet': True,
+                    'no_warnings': True,
+                }
+                if self.cookies_file and os.path.exists(self.cookies_file):
+                    opts['cookiefile'] = self.cookies_file
+                
+                def download():
+                    with YoutubeDL(opts) as ydl:
+                        ydl.extract_info(args, download=True)
+                
+                await asyncio.to_thread(download)
+                video_file = 'ytdl_video.mp4'
+            
+            if not video_file or not os.path.exists(video_file):
+                return await utils.answer(message, self.strings("error").format("File not found"))
+            
+            await utils.answer(message, self.strings("playing"))
+            
+            await self.call.play(
+                chat,
+                MediaStream(
+                    video_file,
+                    audio_parameters=AudioQuality.HIGH,
+                    video_parameters=VideoQuality.HD_720p,
+                    audio_flags=MediaStream.Flags.REQUIRED,
+                    video_flags=MediaStream.Flags.AUTO_DETECT,
+                ),
+            )
+            self.active_chats.add(chat)
+            
+        except Exception as e:
+            logger.exception(e)
+            await utils.answer(message, self.strings("error").format(str(e)))
+
+    @loader.command(ru_doc="— стоп")
+    async def vstopcmd(self, message: types.Message):
+        chat = await self._get_chat(message)
+        if chat is None:
+            return
+        try:
+            await self.call.leave_call(chat)
+            self.active_chats.discard(chat)
+            await utils.answer(message, self.strings("stop"))
+        except Exception as e:
+            await utils.answer(message, self.strings("error").format(str(e)))
+
+    @loader.command(ru_doc="— пауза")
+    async def vpausecmd(self, message: types.Message):
+        chat = await self._get_chat(message)
+        if chat is None:
+            return
+        try:
+            await self.call.pause(chat)
+            await utils.answer(message, self.strings("pause"))
+        except Exception as e:
+            await utils.answer(message, self.strings("error").format(str(e)))
+
+    @loader.command(ru_doc="— продолжить")
+    async def vresumecmd(self, message: types.Message):
+        chat = await self._get_chat(message)
+        if chat is None:
+            return
+        try:
+            await self.call.resume(chat)
+            await utils.answer(message, self.strings("resume"))
+        except Exception as e:
+            await utils.answer(message, self.strings("error").format(str(e)))
+
+    @loader.command(ru_doc="— заглушить")
+    async def vmutecmd(self, message: types.Message):
+        chat = await self._get_chat(message)
+        if chat is None:
+            return
+        try:
+            await self.call.mute(chat)
+            await utils.answer(message, self.strings("mute"))
+        except Exception as e:
+            await utils.answer(message, self.strings("error").format(str(e)))
+
+    @loader.command(ru_doc="— включить звук")
+    async def vunmutecmd(self, message: types.Message):
+        chat = await self._get_chat(message)
+        if chat is None:
+            return
+        try:
+            await self.call.unmute(chat)
+            await utils.answer(message, self.strings("unmute"))
+        except Exception as e:
+            await utils.answer(message, self.strings("error").format(str(e)))
+
+    @loader.command(ru_doc="[clear] или реплай на .txt — установить cookies для YouTube")
+    async def vcookiescmd(self, message: types.Message):
+        args = utils.get_args_raw(message)
+        reply = await message.get_reply_message()
+        
+        if args == "clear":
+            self.cookies_file = None
+            self.set("cookies_file", None)
+            if os.path.exists("yt_cookies.txt"):
+                os.remove("yt_cookies.txt")
+            return await utils.answer(message, self.strings("cookies_cleared"))
+        
+        if not reply or not reply.document:
+            if self.cookies_file and os.path.exists(self.cookies_file):
+                return await utils.answer(message, self.strings("cookies_info").format(self.cookies_file))
+            return await utils.answer(message, self.strings("cookies_not_set"))
+        
+        file_path = await reply.download_media("yt_cookies.txt")
+        self.cookies_file = os.path.abspath(file_path)
+        self.set("cookies_file", self.cookies_file)
+        await utils.answer(message, self.strings("cookies_set").format(self.cookies_file))
+
+    @loader.command(ru_doc="<запрос> — поиск музыки")
+    async def smcmd(self, message: types.Message):
+        args = utils.get_args_raw(message)
+        reply = await message.get_reply_message()
+        
+        if not args:
+            return await utils.answer(message, self.strings("no_audio"))
+        
+        await utils.answer(message, self.strings("searching"))
+        
+        try:
+            music = await message.client.inline_query('lybot', args)
+            await message.delete()
+            await message.client.send_file(
+                message.chat_id,
+                music[0].result.document,
+                reply_to=reply.id if reply else None
+            )
+        except Exception:
+            await message.client.send_message(
+                message.chat_id,
+                self.strings("not_found").format(utils.escape_html(args))
+            )
+
+    @loader.command(ru_doc="<реплай> — распознать трек")
+    async def shazamcmd(self, message: types.Message):
+        reply = await message.get_reply_message()
+        
+        if not reply or not reply.media:
+            return await utils.answer(message, self.strings("reply_audio"))
+        
+        await utils.answer(message, self.strings("downloading"))
+        
+        try:
+            audio_bytes = await reply.download_media(bytes)
+            
+            shazam = Shazam(audio_bytes)
+            result = next(shazam.recognizeSong())
+            
+            if 'track' in result[1]:
+                track = result[1]['track']
+                title = track['share']['subject']
+                image = track['images'].get('background', track['images'].get('coverart'))
+                
+                await message.client.send_file(
+                    message.chat_id,
+                    file=image,
+                    caption=self.strings("recognized").format(utils.escape_html(title)),
+                    reply_to=reply.id
+                )
+                await message.delete()
+            else:
+                await utils.answer(message, self.strings("not_recognized"))
+                
+        except Exception as e:
+            logger.exception(e)
+            await utils.answer(message, self.strings("not_recognized"))
