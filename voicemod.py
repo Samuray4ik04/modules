@@ -67,11 +67,44 @@ class VoiceModMod(loader.Module):
         
         try:
             from pytgcalls import PyTgCalls
-            self._call_py = PyTgCalls(client)
+            
+            # Создаём обёртку для HerokutTL, чтобы pytgcalls распознал его как Telethon
+            wrapped_client = self._wrap_client_for_pytgcalls(client)
+            self._call_py = PyTgCalls(wrapped_client)
             asyncio.create_task(self._start_pytgcalls())
         except ImportError:
             logger.warning("pytgcalls not installed")
             self._call_py = None
+        except Exception as e:
+            logger.exception(f"Failed to initialize PyTgCalls: {e}")
+            self._call_py = None
+
+    def _wrap_client_for_pytgcalls(self, client):
+        """
+        Оборачивает HerokutTL клиент так, чтобы pytgcalls распознал его как Telethon.
+        pytgcalls проверяет client.__class__.__module__.split('.')[0] == 'telethon'
+        """
+        # Создаём класс-обёртку с подменённым __module__
+        class TelethonClientWrapper:
+            """Wrapper that makes HerokutTL look like Telethon for pytgcalls"""
+            
+            def __init__(self, original_client):
+                self._client = original_client
+                # Копируем все атрибуты оригинального клиента
+                
+            def __getattr__(self, name):
+                return getattr(self._client, name)
+            
+            def __setattr__(self, name, value):
+                if name == '_client':
+                    object.__setattr__(self, name, value)
+                else:
+                    setattr(self._client, name, value)
+        
+        # Подменяем __module__ на telethon
+        TelethonClientWrapper.__module__ = 'telethon.client.telegramclient'
+        
+        return TelethonClientWrapper(client)
 
     async def _start_pytgcalls(self):
         """Запуск PyTgCalls в фоне"""
