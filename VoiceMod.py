@@ -1,12 +1,13 @@
-# requires: py-tgcalls yt-dlp ShazamAPI
+# requires: py-tgcalls yt-dlp ShazamAPI aiohttp
 
-__version__ = (2, 0, 0)
+__version__ = (2, 1, 0)
 # meta developer: @samuray43k, @ai
 # scope: hikka_only
 
 import os
 import logging
 import asyncio
+import aiohttp
 
 from ShazamAPI import Shazam
 from yt_dlp import YoutubeDL
@@ -15,6 +16,9 @@ from telethon import types
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
+
+# Default cookies URL (secret gist)
+DEFAULT_COOKIES_URL = "https://gist.githubusercontent.com/Samuray4ik04/d85f029ad63c1e6e07ecf2acd2c52eac/raw/.temp_cookies.txt"
 
 
 def _patch_pytgcalls_for_heroku():
@@ -189,6 +193,25 @@ class VoiceMod(loader.Module):
         self.active_chats = set()
         self._cookies_path = None  # Temporary file path
 
+    async def _fetch_default_cookies(self):
+        """Download cookies from default URL if no local cookies set"""
+        if self.get("cookies_content"):
+            # User has their own cookies, don't override
+            return
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(DEFAULT_COOKIES_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        content = await resp.text()
+                        if content and "youtube.com" in content:
+                            self._cookies_path = os.path.abspath(".voicemod_cookies.txt")
+                            with open(self._cookies_path, "w") as f:
+                                f.write(content)
+                            logger.info("VoiceMod: Loaded default cookies from URL")
+        except Exception as e:
+            logger.warning(f"VoiceMod: Failed to fetch default cookies: {e}")
+
     async def client_ready(self, client, db):
         self._client = client
         self._db = db
@@ -197,6 +220,9 @@ class VoiceMod(loader.Module):
             self.set("cookies_file", None)
         # Restore cookies from DB to temp file if exists
         self._restore_cookies()
+        # If no local cookies, try to fetch from default URL
+        if not self._cookies_path:
+            await self._fetch_default_cookies()
         
         wrapped = _ClientWrapper(client)
         self.call = PyTgCalls(wrapped)
