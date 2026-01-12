@@ -7,11 +7,11 @@
     Обновлено для pytgcalls 3.x
 """
 
-__version__ = (2, 1, 0)
+__version__ = (2, 2, 0)
 # meta developer: @samuray43k @ai
 # meta pic: https://img.icons8.com/fluency/512/microphone.png
 # scope: hikka_only
-# requires: ffmpeg-python yt-dlp shazamio
+# requires: ffmpeg-python yt-dlp shazamio py-tgcalls
 
 import io
 import os
@@ -20,6 +20,8 @@ import logging
 import asyncio
 import subprocess
 import sys
+import site
+import importlib
 from typing import Dict, Optional, Union
 
 from .. import loader, utils
@@ -27,24 +29,94 @@ from herokutl.types import Message
 
 logger = logging.getLogger(__name__)
 
+# Глобальная переменная для правильного модуля pytgcalls
+_pytgcalls_module = None
 
-def ensure_pytgcalls():
-    """Устанавливает py-tgcalls если не установлен"""
+
+def _find_correct_pytgcalls():
+    """
+    Находит правильный py-tgcalls даже если установлен конфликтующий MarshalX/pytgcalls.
+    py-tgcalls имеет класс PyTgCalls, MarshalX — нет.
+    """
+    global _pytgcalls_module
+    
+    if _pytgcalls_module is not None:
+        return _pytgcalls_module
+    
+    # Сначала пробуем обычный импорт
     try:
         import pytgcalls
-        return True
+        if hasattr(pytgcalls, 'PyTgCalls'):
+            _pytgcalls_module = pytgcalls
+            logger.info("Found py-tgcalls via direct import")
+            return pytgcalls
     except ImportError:
-        logger.info("Installing py-tgcalls...")
-        try:
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install", 
-                "py-tgcalls", "-q", "--user"
-            ])
-            logger.info("py-tgcalls installed successfully")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to install py-tgcalls: {e}")
-            return False
+        pass
+    
+    # Если не нашли PyTgCalls — ищем в user site-packages
+    user_site = site.getusersitepackages()
+    pytgcalls_paths = [
+        os.path.join(user_site, 'pytgcalls'),
+        os.path.expanduser('~/.local/lib/python3.10/site-packages/pytgcalls'),
+        os.path.expanduser('~/.local/lib/python3.11/site-packages/pytgcalls'),
+        os.path.expanduser('~/.local/lib/python3.12/site-packages/pytgcalls'),
+    ]
+    
+    for path in pytgcalls_paths:
+        if os.path.isdir(path):
+            parent = os.path.dirname(path)
+            if parent not in sys.path:
+                sys.path.insert(0, parent)
+            
+            # Перезагружаем модуль
+            if 'pytgcalls' in sys.modules:
+                del sys.modules['pytgcalls']
+            
+            # Удаляем все субмодули pytgcalls
+            to_delete = [k for k in sys.modules.keys() if k.startswith('pytgcalls')]
+            for k in to_delete:
+                del sys.modules[k]
+            
+            try:
+                import pytgcalls
+                if hasattr(pytgcalls, 'PyTgCalls'):
+                    _pytgcalls_module = pytgcalls
+                    logger.info(f"Found py-tgcalls in {parent}")
+                    return pytgcalls
+            except Exception as e:
+                logger.debug(f"Failed to import from {parent}: {e}")
+                continue
+    
+    return None
+
+
+def ensure_pytgcalls():
+    """Проверяет/устанавливает py-tgcalls"""
+    module = _find_correct_pytgcalls()
+    if module is not None:
+        return True
+    
+    logger.info("py-tgcalls not found, installing...")
+    try:
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", 
+            "py-tgcalls", "-q", "--user", "--force-reinstall"
+        ])
+        logger.info("py-tgcalls installed successfully")
+        
+        # Пробуем найти после установки
+        return _find_correct_pytgcalls() is not None
+    except Exception as e:
+        logger.error(f"Failed to install py-tgcalls: {e}")
+        return False
+
+
+def get_pytgcalls():
+    """Возвращает модуль py-tgcalls"""
+    global _pytgcalls_module
+    if _pytgcalls_module is None:
+        _find_correct_pytgcalls()
+    return _pytgcalls_module
 
 
 @loader.tds
@@ -93,7 +165,14 @@ class VoiceModMod(loader.Module):
             return
         
         try:
-            from pytgcalls import PyTgCalls
+            # Используем нашу функцию поиска правильного модуля
+            pytgcalls_mod = get_pytgcalls()
+            if pytgcalls_mod is None:
+                logger.warning("py-tgcalls not found (PyTgCalls class missing)")
+                self._call_py = None
+                return
+            
+            PyTgCalls = pytgcalls_mod.PyTgCalls
             
             # Создаём обёртку для HerokutTL, чтобы pytgcalls распознал его как Telethon
             wrapped_client = self._wrap_client_for_pytgcalls(client)
@@ -174,7 +253,8 @@ class VoiceModMod(loader.Module):
             return
         
         try:
-            from pytgcalls.types import MediaStream
+            pytgcalls_mod = get_pytgcalls()
+            MediaStream = pytgcalls_mod.types.MediaStream
             
             # Создаём тихий стрим для подключения
             await self._call_py.play(
@@ -243,7 +323,8 @@ class VoiceModMod(loader.Module):
             return await utils.answer(message, self.strings("no_audio"))
         
         try:
-            from pytgcalls.types import MediaStream
+            pytgcalls_mod = get_pytgcalls()
+            MediaStream = pytgcalls_mod.types.MediaStream
             
             message = await utils.answer(message, self.strings("downloading"))
             
