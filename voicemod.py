@@ -141,20 +141,34 @@ class VoiceModMod(loader.Module):
     async def _get_chat_id(self, message: Message) -> Optional[int]:
         """Получить ID чата из аргументов или текущего чата"""
         args = utils.get_args_raw(message)
-        if not args:
-            return utils.get_chat_id(message)
         
-        try:
-            return int(args.split()[0])
-        except ValueError:
-            pass
+        if args:
+            try:
+                chat_id = int(args.split()[0])
+            except ValueError:
+                try:
+                    entity = await message.client.get_entity(args.split()[0])
+                    chat_id = entity.id
+                except Exception as e:
+                    await utils.answer(message, self.strings("error").format(str(e)))
+                    return None
+        else:
+            chat_id = utils.get_chat_id(message)
         
-        try:
-            entity = await message.client.get_entity(args.split()[0])
-            return entity.id
-        except Exception as e:
-            await utils.answer(message, self.strings("error").format(str(e)))
-            return None
+        # pytgcalls ожидает полный ID с -100 префиксом для каналов/супергрупп
+        # utils.get_chat_id() может возвращать без префикса
+        if chat_id and chat_id > 0:
+            # Это может быть канал/супергруппа без префикса
+            try:
+                entity = await message.client.get_entity(message.peer_id)
+                if hasattr(entity, 'broadcast') or hasattr(entity, 'megagroup'):
+                    # Это канал или супергруппа — нужен -100 префикс
+                    if chat_id > 0:
+                        chat_id = -1000000000000 - chat_id
+            except:
+                pass
+        
+        return chat_id
 
     def _check_pytgcalls(self) -> bool:
         """Проверка доступности pytgcalls"""
