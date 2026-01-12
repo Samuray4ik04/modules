@@ -111,7 +111,7 @@ class VoiceModMod(loader.Module):
         return TelethonClientWrapper(client)
 
     def _patch_pytgcalls(self):
-        """Создаёт herokutl_client.py как копию telethon_client.py"""
+        """Создаёт и патчит herokutl_client.py для совместимости с herokutl"""
         import shutil
         
         try:
@@ -122,9 +122,27 @@ class VoiceModMod(loader.Module):
             src = os.path.join(mtproto_path, "telethon_client.py")
             dst = os.path.join(mtproto_path, "herokutl_client.py")
             
-            if os.path.exists(src) and not os.path.exists(dst):
-                shutil.copy2(src, dst)
-                logger.info(f"Created herokutl_client.py")
+            if os.path.exists(src):
+                # Читаем telethon_client.py
+                with open(src, 'r') as f:
+                    content = f.read()
+                
+                # Заменяем telethon на herokutl
+                content = content.replace('from telethon', 'from herokutl')
+                content = content.replace('import telethon', 'import herokutl')
+                
+                # Фикс для UpdateGroupCall.chat_id -> UpdateGroupCall.call
+                # herokutl может иметь другую структуру
+                # Добавляем безопасную обработку
+                old_handler = 'update.chat_id,'
+                new_handler = 'getattr(update, "chat_id", None) or getattr(getattr(update, "call", None), "chat_id", None),'
+                content = content.replace(old_handler, new_handler)
+                
+                # Записываем
+                with open(dst, 'w') as f:
+                    f.write(content)
+                
+                logger.info(f"Created/updated herokutl_client.py with patches")
             elif os.path.exists(dst):
                 logger.info("herokutl_client.py already exists")
         except Exception as e:
