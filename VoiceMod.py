@@ -807,10 +807,13 @@ class VoiceMod(loader.Module):
             if has_media:
                 file = await reply.download_media()
                 title = get_filename(reply)
-                audio = True
+                # Detect if it's audio or video from mime type
+                mime = getattr(reply.document, "mime_type", "") if reply.document else ""
+                audio = mime.startswith("audio")
             else:
-                file, title = await self._download(args, audio_only=True)
-                audio = True
+                # Download with video by default for queue
+                file, title = await self._download(args, audio_only=False)
+                audio = False
 
             if not file or not os.path.exists(file):
                 return await utils.answer(message, self.strings("error").format("Download failed"))
