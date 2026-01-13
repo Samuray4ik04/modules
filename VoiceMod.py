@@ -127,7 +127,7 @@ COOKIES_URL = (
 COOKIES_FILE = ".voicemod_cookies.txt"
 
 YTDL_VIDEO_OPTS = {
-    "format": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
+    "format": "bestvideo[height<=720][fps>=50][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
     "merge_output_format": "mp4",
     "outtmpl": "ytdl_%(id)s.%(ext)s",
     "quiet": True,
